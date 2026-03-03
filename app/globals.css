@@ -16,37 +16,17 @@ body {
   color: var(--text);
 }
 
-.container {
-  max-width: 1120px;
-  margin: 0 auto;
-  padding: 24px 16px 40px;
-}
+.container { max-width: 1180px; margin: 0 auto; padding: 20px 16px 38px; }
+.fadeIn { animation: fadeIn .35s ease; }
+@keyframes fadeIn { from {opacity:0; transform: translateY(4px);} to {opacity:1; transform:none;} }
 
-.header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 18px;
-}
+.header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
 .header h1 { margin: 0; }
 .header p { margin: 4px 0 0; color: var(--muted); }
-.level {
-  background: #fff3d9;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 8px 14px;
-  font-weight: 600;
-}
+.level { background: #fff3d9; border: 1px solid var(--border); border-radius: 999px; padding: 8px 14px; font-weight: 600; }
 
 .tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-.tabs button {
-  border: 1px solid var(--border);
-  background: white;
-  color: var(--text);
-  border-radius: 10px;
-  padding: 9px 14px;
-  cursor: pointer;
-}
+.tabs button { border: 1px solid var(--border); background: white; border-radius: 10px; padding: 10px 14px; cursor: pointer; }
 .tabs button.active { background: #fff3d9; border-color: #f8d892; }
 
 .grid { display: grid; gap: 14px; }
@@ -59,108 +39,77 @@ body {
   border-radius: 16px;
   padding: 16px;
   box-shadow: 0 8px 24px rgba(245, 158, 11, 0.08);
+  transition: transform .2s ease, box-shadow .2s ease;
 }
-
+.card:hover { transform: translateY(-1px); box-shadow: 0 12px 24px rgba(245, 158, 11, 0.10); }
 .hero { background: linear-gradient(135deg, #fff8eb, #fff); }
-.stats { display: flex; gap: 14px; margin-top: 14px; flex-wrap: wrap; color: var(--muted); font-weight: 600; }
 
-.primary, .secondary {
-  border: none;
-  border-radius: 12px;
-  padding: 12px 16px;
-  cursor: pointer;
-  font-size: 0.95rem;
-  font-weight: 700;
-}
+.stats { display: flex; gap: 12px; margin-top: 12px; flex-wrap: wrap; color: var(--muted); font-weight: 600; }
+.primary, .secondary { border: none; border-radius: 12px; padding: 11px 14px; cursor: pointer; font-weight: 700; }
 .primary { background: var(--primary); color: white; }
 .primary:hover { background: var(--primary-dark); }
 .secondary { background: #fff3d9; color: #7a4b02; }
 
+.actions { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
+
+select, input, textarea {
+  width: 100%;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: white;
+}
+
 .rings { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 14px; }
 .ringWrap { position: relative; min-height: 150px; display: flex; align-items: center; justify-content: center; }
-.ringLabel {
-  position: absolute;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-}
+.ringLabel { position: absolute; display: flex; flex-direction: column; align-items: center; text-align: center; }
 .ringLabel small { color: var(--muted); font-size: 0.75rem; }
 
-.timer { font-size: 2.5rem; font-weight: 800; margin-bottom: 10px; }
-.progressMeter {
-  width: 100%;
-  height: 10px;
-  background: #fef3c7;
-  border-radius: 999px;
-  overflow: hidden;
-  margin-bottom: 8px;
-}
-.progressMeter > div { height: 100%; background: #f59e0b; transition: width 0.4s ease; }
-
-label { display: block; margin-top: 12px; margin-bottom: 4px; font-weight: 600; }
-select {
-  width: 100%;
-  padding: 10px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-}
-.actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
-
-.chatLog {
-  height: 340px;
-  overflow: auto;
-  background: #fffdf8;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  padding: 10px;
-}
-.bubble {
-  padding: 10px 12px;
-  border-radius: 12px;
-  margin-bottom: 8px;
-  white-space: pre-wrap;
-  line-height: 1.4;
-}
-.bubble.assistant { background: #fff3d9; }
-.bubble.user { background: #f3f4f6; }
-
+.questionCard { border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: #fffdf8; }
 .quickReplies { display: grid; gap: 8px; margin-top: 10px; }
-.quickReplies button {
-  text-align: left;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: white;
-  padding: 10px;
-  cursor: pointer;
-}
+.quickReplies button { text-align: left; border: 1px solid var(--border); border-radius: 10px; background: white; padding: 10px; cursor: pointer; }
+.quickReplies button.selected { background: #fff3d9; }
 
-.heatmap {
-  display: grid;
-  grid-template-columns: repeat(18, 1fr);
-  gap: 5px;
-}
-.day {
-  aspect-ratio: 1;
-  border-radius: 4px;
-  background: #f3f4f6;
-}
-.day.on { background: #f59e0b; }
+.chat .bubble { padding: 10px 12px; border-radius: 12px; background: #fff3d9; white-space: pre-wrap; }
+.summaryBox { background: #fff3d9; border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+.warn { color: #b45309; font-weight: 600; }
 
-.badges { display: flex; flex-wrap: wrap; gap: 8px; }
-.badge {
-  background: #fff3d9;
+.ipad-session { position: relative; }
+.timerCorner {
+  position: fixed;
+  right: 20px;
+  bottom: 16px;
+  background: #ffffffcc;
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 6px 10px;
-  font-size: 0.85rem;
+  padding: 8px 12px;
+  font-weight: 700;
+  font-size: .9rem;
+  backdrop-filter: blur(2px);
+}
+
+.confetti {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  font-size: 1.5rem;
+  animation: pop 2.2s ease forwards;
+}
+@keyframes pop {
+  0% { opacity: 0; transform: translateX(-50%) scale(.6); }
+  15% { opacity: 1; transform: translateX(-50%) scale(1); }
+  100% { opacity: 0; transform: translateX(-50%) translateY(-12px) scale(1.05); }
 }
 
 ul { padding-left: 18px; }
 li { margin-bottom: 6px; }
 
+@media (max-width: 1100px) {
+  .rings { grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
 @media (max-width: 900px) {
   .grid.two { grid-template-columns: 1fr; }
   .span2 { grid-column: span 1; }
-  .rings { grid-template-columns: repeat(2, minmax(0,1fr)); }
 }
