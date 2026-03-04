@@ -1,169 +1,85 @@
-import { SUBJECTS } from '@/lib/curriculum';
+import Anthropic from '@anthropic-ai/sdk';
+import { NextResponse } from 'next/server';
 
-const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
+const client = process.env.ANTHROPIC_API_KEY
+  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  : null;
 
-function getCurrentConcept(subjectKey, unitIndex, conceptIndex) {
-  const subject = SUBJECTS[subjectKey];
-  const unit = subject?.units?.[unitIndex] || subject?.units?.[0];
-  const concept = unit?.concepts?.[conceptIndex] || unit?.concepts?.[0];
-  return { subject, unit, concept };
-}
-
-function fallbackTutor({ concept, unit, phase = 'introduction', message = '' }) {
-  if (!concept) return 'Great work today. Let\'s do a spiral review next session.';
-
-  const intro = [
-    `Topic: ${unit.title} — ${concept.title}`,
-    concept.explanation,
-    '',
-    'Let\'s start with one quick check:',
-    concept.questions?.[0]?.prompt || 'Tell me what part feels easiest so far.',
-  ].join('\n');
-
-  const reteach = [
-    `Nice effort. Let\'s look at ${concept.title} one more way.`,
-    'Think step by step and focus on the key idea before choosing an answer.',
-    concept.questions?.[1]?.prompt || concept.questions?.[0]?.prompt || 'Try again in your own words.',
-  ].join('\n');
-
-  if (phase === 'reteach' || /wrong|miss|review|different/i.test(message)) return reteach;
-  return intro;
-}
-
-async function callOpenAI(messages) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return null;
-
-  const response = await fetch(OPENAI_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      temperature: 0.4,
-      messages,
-    }),
-  });
-
-  if (!response.ok) throw new Error(`OpenAI error: ${response.status}`);
-  const data = await response.json();
-  return data?.choices?.[0]?.message?.content?.trim() || null;
-}
-
-async function gradeFreeText({ prompt, rubric, expectedAnswer, studentAnswer, subject, conceptTitle }) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    const normalized = (studentAnswer || '').trim().toLowerCase();
-    const expected = (expectedAnswer || '').trim().toLowerCase();
-    const correct = expected && normalized.includes(expected.slice(0, Math.min(12, expected.length)));
-    return {
-      correct,
-      feedback: correct
-        ? 'Great explanation. You captured the main idea.'
-        : 'Nice try. Include the key idea from the concept and be specific.',
-    };
-  }
-
-  const system = `You grade short answers for a bright 5th grader. Return strict JSON only: {"correct": boolean, "feedback": string}. Keep feedback under 2 sentences, warm and concrete.`;
-  const user = {
-    subject,
-    conceptTitle,
-    prompt,
-    rubric,
-    expectedAnswer,
-    studentAnswer,
-  };
-
-  const raw = await callOpenAI([
-    { role: 'system', content: system },
-    { role: 'user', content: JSON.stringify(user) },
-  ]);
-
-  try {
-    const parsed = JSON.parse(raw);
-    return {
-      correct: Boolean(parsed.correct),
-      feedback: parsed.feedback || 'Good effort — let\'s refine this answer.',
-    };
-  } catch {
-    return {
-      correct: /correct|yes|right/i.test(raw || ''),
-      feedback: raw || 'Good effort — let\'s refine this answer.',
-    };
-  }
-}
-
+/**
+ * AI Tutor endpoint
+ * POST /api/tutor
+ * Body: { message, conceptTitle, subject, wrongAnswer, correctAnswer, mode }
+ * Modes: 'explain', 'reteach', 'hint', 'encourage'
+ */
 export async function POST(req) {
-  const body = await req.json();
-
-  if (body.mode === 'grade_free_text') {
-    const result = await gradeFreeText(body);
-    return Response.json(result);
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  const {
-    subject = 'math',
-    unitIndex = 0,
-    conceptIndex = 0,
-    chat = [],
-    message = '',
-    phase = 'introduction',
-    recentWrongAnswers = [],
-  } = body;
+  const { message, conceptTitle, subject, wrongAnswer, correctAnswer, mode = 'explain' } = body;
 
-  const { subject: subjectData, unit, concept } = getCurrentConcept(subject, unitIndex, conceptIndex);
-
-  if (!concept) {
-    return Response.json({
-      reply: `Awesome consistency. You have finished the core concepts in ${SUBJECTS[subject]?.name || 'this subject'}.`,
+  if (!client) {
+    return NextResponse.json({
+      response: getOfflineFallback(mode, conceptTitle, correctAnswer),
+      offline: true,
     });
   }
 
-  const systemPrompt = `You are a patient, encouraging tutor for a bright 5th grader named Raleigh. Use Socratic method on wrong answers. Keep explanations concrete with real-world examples. Never condescending.
-Stay on the current concept.
-Keep responses concise (2-4 sentences, unless asking a question).
-Session phase rules:
-- introduction: teach first, then ask one check-for-understanding question.
-- guided_practice: step-by-step coaching.
-- independent_practice: brief feedback + hint, not full solution.
-- mastery_check: no hints; only short correct/incorrect feedback.
-- reteach: different explanation style than before, more concrete.
-`;
+  const systemPrompt = `You are Remy, a friendly and encouraging AI tutor helping Raleigh (age 10, 5th grade) learn ${subject || 'school subjects'}.
 
-  const contextBlock = {
-    subject: subjectData?.name,
-    unit: unit?.title,
-    concept: concept?.title,
-    conceptExplanation: concept?.explanation,
-    phase,
-    questionsAsked: concept?.questions?.length || 0,
-    recentWrongAnswers,
-  };
+Your personality:
+- Warm, encouraging, never condescending
+- Explain things with relatable examples (Publix, Florida weather, sports, Roblox)
+- Keep responses SHORT (2-4 sentences max) — Raleigh is 10 and has a short attention span
+- When she gets something wrong, say "Almost!" or "Good try!" then explain clearly — never "Wrong"
+- Use emojis sparingly (1-2 max per response)
+- You're her study buddy, not her teacher
 
-  const windowedChat = (chat || []).slice(-10).map((m) => ({ role: m.role, content: m.text }));
+Current topic: ${conceptTitle}
+Subject: ${subject}`;
 
-  let reply = null;
+  let userMessage = message;
+
+  if (mode === 'reteach' && wrongAnswer && correctAnswer) {
+    userMessage = `Raleigh answered "${wrongAnswer}" but the correct answer was "${correctAnswer}" for the concept "${conceptTitle}". Give a short, clear re-explanation using a different example or approach. Keep it under 3 sentences.`;
+  } else if (mode === 'hint') {
+    userMessage = `Give Raleigh a helpful hint for the question about "${conceptTitle}" without giving away the answer. Keep it encouraging and under 2 sentences.`;
+  } else if (mode === 'encourage') {
+    userMessage = `Give Raleigh a short, energetic encouragement message (1-2 sentences) to keep going with her learning session on "${conceptTitle}".`;
+  } else if (mode === 'explain') {
+    userMessage = `Explain "${conceptTitle}" to Raleigh in a fresh, engaging way using a real-world example. Keep it to 3 sentences max.`;
+  }
+
   try {
-    reply = await callOpenAI([
-      { role: 'system', content: systemPrompt },
-      { role: 'system', content: `Current context: ${JSON.stringify(contextBlock)}` },
-      ...windowedChat,
-      ...(message ? [{ role: 'user', content: message }] : []),
-    ]);
-  } catch {
-    reply = null;
-  }
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 300,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userMessage }],
+    });
 
-  if (!reply) {
-    reply = fallbackTutor({ concept, unit, phase, message });
+    return NextResponse.json({
+      response: response.content[0]?.text || 'Let\'s keep going! 💪',
+      offline: false,
+    });
+  } catch (err) {
+    console.error('Tutor API error:', err.message);
+    return NextResponse.json({
+      response: getOfflineFallback(mode, conceptTitle, correctAnswer),
+      offline: true,
+    });
   }
+}
 
-  return Response.json({
-    reply,
-    conceptId: concept.id,
-    conceptTitle: concept.title,
-    questionCount: concept.questions?.length || 0,
-  });
+function getOfflineFallback(mode, conceptTitle, correctAnswer) {
+  const fallbacks = {
+    reteach: `Let's look at "${conceptTitle}" one more time! ${correctAnswer ? `The key idea is: ${correctAnswer}` : 'Review the explanation above and try again.'} You've got this! 💪`,
+    hint: `Think about what you know about "${conceptTitle}" — the explanation above has the clue you need! 🔍`,
+    encourage: `You're doing great! Keep going — every question you answer makes you smarter! 🌟`,
+    explain: `Read the explanation carefully — it has everything you need to know about "${conceptTitle}"! 📚`,
+  };
+  return fallbacks[mode] || fallbacks.encourage;
 }

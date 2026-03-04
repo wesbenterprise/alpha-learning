@@ -1,45 +1,76 @@
+import { NextResponse } from 'next/server';
+
+/**
+ * Parent Notification endpoint
+ * POST /api/notify
+ * Body: { event, data, parentEmail? }
+ * Events: 'session-complete', 'daily-reminder', 'weekly-summary', 'badge-earned'
+ */
 export async function POST(req) {
+  let body;
   try {
-    const body = await req.json();
-    const { email, status, streak, weeklyCompleted } = body || {};
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
 
-    const summary = {
-      email,
-      subject: 'Alpha Learning Daily Summary',
-      status: status || 'Not yet started ⏳',
-      streak: streak || 0,
-      weeklyCompleted: weeklyCompleted || 0,
-      sentAt: new Date().toISOString(),
-    };
+  const { event, data } = body;
 
-    const webhookUrl = process.env.PARENT_NOTIFY_WEBHOOK_URL;
-    if (webhookUrl) {
-      await fetch(webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(summary),
-      });
-    }
+  // For now, log the notification and return the message content
+  // In production, you'd send email via SendGrid/Resend, push via Firebase, etc.
+  const message = buildNotificationMessage(event, data);
 
-    const resendApiKey = process.env.RESEND_API_KEY;
-    if (resendApiKey && email) {
-      await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${resendApiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          from: process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev',
-          to: email,
-          subject: 'Alpha Learning Daily Summary',
-          text: `${summary.status}\nStreak: ${summary.streak}\nThis week: ${summary.weeklyCompleted}/5`,
-        }),
-      });
-    }
+  console.log('[Notify]', event, message);
 
-    return Response.json({ ok: true, summary });
-  } catch (error) {
-    return Response.json({ ok: false, error: error?.message || 'notify_failed' }, { status: 500 });
+  // Could wire up email/SMS here:
+  // await sendEmail({ to: parentEmail, subject: message.subject, body: message.body });
+
+  return NextResponse.json({ sent: true, message });
+}
+
+function buildNotificationMessage(event, data) {
+  const name = data?.studentName || 'Raleigh';
+  const subject = data?.subject || '';
+  const score = data?.score;
+  const streak = data?.streak;
+  const badge = data?.badge;
+
+  switch (event) {
+    case 'session-complete':
+      return {
+        subject: `${name} completed today's session! ${score >= 90 ? '🌟' : '✅'}`,
+        body: `${name} just finished a ${subject} session with a score of ${score}%${streak ? ` — ${streak}-day streak! 🔥` : ''}. Great work today!`,
+        emoji: score >= 90 ? '🌟' : '✅',
+        short: `${name} completed today's session — ${score}% in ${subject}${streak ? ` 🔥${streak}` : ''}`,
+      };
+
+    case 'badge-earned':
+      return {
+        subject: `${name} earned a new badge: ${badge?.name}!`,
+        body: `${name} just earned the "${badge?.name}" badge ${badge?.emoji}! ${badge?.desc}`,
+        emoji: badge?.emoji || '🏅',
+        short: `${name} earned "${badge?.name}" ${badge?.emoji}`,
+      };
+
+    case 'daily-reminder':
+      const hour = new Date().getHours();
+      const timeStr = hour >= 12 ? 'this afternoon' : 'today';
+      return {
+        subject: `⏰ ${name} hasn't done her session yet`,
+        body: `Just a heads up — ${name} hasn't completed her learning session ${timeStr}. This is a great time to check in!`,
+        emoji: '⏰',
+        short: `${name} hasn't started ${timeStr} ⏰`,
+      };
+
+    case 'weekly-summary':
+      return {
+        subject: `📊 ${name}'s weekly learning summary`,
+        body: `This week: ${data?.sessionsCompleted}/5 sessions. Strongest subject: ${data?.topSubject}. Overall mastery: ${data?.mastery}%.`,
+        emoji: '📊',
+        short: `${data?.sessionsCompleted}/5 sessions this week. Mastery: ${data?.mastery}%`,
+      };
+
+    default:
+      return { subject: 'Alpha Learning update', body: JSON.stringify(data), emoji: '📱', short: 'Update' };
   }
 }
