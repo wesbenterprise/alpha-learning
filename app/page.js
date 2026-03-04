@@ -8,6 +8,7 @@ import {
   computeStreakState,
   exportData,
   getLevel,
+  hydrateStateFromSupabase,
   initialState,
   loadState,
   recomputeSubjectMastery,
@@ -18,23 +19,9 @@ import {
 
 const SUBJECT_KEYS = Object.keys(SUBJECTS);
 const SESSION_MINUTES = 30;
-const SEGMENTS = [
-  { id: 'review', title: 'Segment 1 · Review', minutes: 10 },
-  { id: 'new', title: 'Segment 2 · New Learning', minutes: 10 },
-  { id: 'challenge', title: 'Segment 3 · Challenge/Fun', minutes: 10 },
-];
+const QUESTIONS_PER_CONCEPT = 5;
+const CONCEPTS_PER_SESSION = 3;
 const AVATARS = ['🦊', '🐼', '🐯', '🦄'];
-
-function getConcept(subjectKey, unitIndex, conceptIndex) {
-  const subject = SUBJECTS[subjectKey];
-  const unit = subject?.units?.[unitIndex] || subject?.units?.[0];
-  return { subject, unit, concept: unit?.concepts?.[conceptIndex] || unit?.concepts?.[0] };
-}
-
-function parseNumber(v) {
-  const n = Number(String(v).replace(/[^0-9.-]/g, ''));
-  return Number.isFinite(n) ? n : null;
-}
 
 function playSuccessTone() {
   try {
@@ -55,29 +42,65 @@ function recommendation(state) {
     .sort((a, b) => a.mastery - b.mastery)[0]?.key || state.profile?.startSubject || 'math';
 }
 
+function conceptSequence(subjectKey, state) {
+  const subject = SUBJECTS[subjectKey];
+  if (!subject) return [];
+
+  const startUnit = state.subjects[subjectKey]?.currentUnitIndex || 0;
+  const startConcept = state.subjects[subjectKey]?.currentConceptIndex || 0;
+  const list = [];
+
+  subject.units.forEach((unit, uIdx) => {
+    unit.concepts.forEach((concept, cIdx) => {
+      list.push({
+        subjectKey,
+        unitIndex: uIdx,
+        conceptIndex: cIdx,
+        unitTitle: unit.title,
+        concept,
+      });
+    });
+  });
+
+  const startFlatIndex = subject.units.slice(0, startUnit).reduce((a, u) => a + u.concepts.length, 0) + startConcept;
+  const rotated = [...list.slice(startFlatIndex), ...list.slice(0, startFlatIndex)];
+  return rotated.slice(0, CONCEPTS_PER_SESSION);
+}
+
 export default function HomePage() {
   const [state, setState] = useState(initialState);
   const [tab, setTab] = useState('dashboard');
   const [sessionSubject, setSessionSubject] = useState('math');
   const [sessionActive, setSessionActive] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(SESSION_MINUTES * 60);
-  const [segmentIndex, setSegmentIndex] = useState(0);
+  const [sessionPlan, setSessionPlan] = useState([]);
+  const [conceptCursor, setConceptCursor] = useState(0);
+  const [questions, setQuestions] = useState([]);
   const [questionIndex, setQuestionIndex] = useState(0);
-  const [correct, setCorrect] = useState(0);
-  const [answers, setAnswers] = useState([]);
   const [inputValue, setInputValue] = useState('');
+  const [feedback, setFeedback] = useState('');
+  const [conceptCorrect, setConceptCorrect] = useState(0);
+  const [conceptAnswers, setConceptAnswers] = useState([]);
+  const [conceptSummary, setConceptSummary] = useState(null);
+  const [sessionResults, setSessionResults] = useState([]);
   const [summary, setSummary] = useState(null);
-  const [pulse, setPulse] = useState(false);
-  const [dailyChallengeDone, setDailyChallengeDone] = useState(false);
 
   const suggested = recommendation(state);
-  const { subject, unit, concept } = getConcept(
-    sessionSubject,
-    state.subjects[sessionSubject]?.currentUnitIndex || 0,
-    state.subjects[sessionSubject]?.currentConceptIndex || 0,
-  );
+  const currentArc = sessionPlan[conceptCursor];
+  const currentQ = questions[questionIndex];
 
-  useEffect(() => setState(loadState()), []);
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const local = loadState();
+      const hydrated = await hydrateStateFromSupabase(local);
+      if (mounted) setState(hydrated);
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   useEffect(() => {
     saveState(state);
     syncStateToSupabase(state);
@@ -85,26 +108,17 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!sessionActive) return;
-    const interval = setInterval(() => {
+    const timer = setInterval(() => {
       setSecondsLeft((s) => {
         if (s <= 1) {
-          completeSession(true);
+          setSessionActive(false);
           return 0;
         }
         return s - 1;
       });
     }, 1000);
-    return () => clearInterval(interval);
+    return () => clearInterval(timer);
   }, [sessionActive]);
-
-  useEffect(() => {
-    const seg = Math.min(2, Math.floor(((SESSION_MINUTES * 60 - secondsLeft) / 600)));
-    if (seg !== segmentIndex && sessionActive) {
-      setSegmentIndex(seg);
-      setPulse(true);
-      setTimeout(() => setPulse(false), 800);
-    }
-  }, [secondsLeft, sessionActive]);
 
   useEffect(() => {
     const weeklyCompleted = weeklyCompletionCount(state.sessionLogs);
@@ -130,139 +144,193 @@ export default function HomePage() {
   const totalMastery = useMemo(() => Math.round(SUBJECT_KEYS.reduce((a, k) => a + (state.subjects[k]?.mastery || 0), 0) / SUBJECT_KEYS.length), [state.subjects]);
   const level = getLevel(totalMastery);
 
-  const reviewQuestions = useMemo(() => {
-    const mastered = Object.values(state.subjects[sessionSubject]?.conceptMap || {}).filter((c) => c.status === 'mastered').slice(0, 3);
-    return mastered.map((m) => ({ type: 'free_text', prompt: `Quick review: explain ${m.title} in one sentence.`, sample_answer: m.title }));
-  }, [state.subjects, sessionSubject]);
-
-  const baseQuestions = useMemo(() => (concept?.questions || []).map((x) => ({ ...x, type: x.type || 'multiple_choice' })), [concept?.id]);
-  const challengeQuestion = useMemo(() => ({
-    type: 'free_text',
-    prompt: `Bonus round: connect ${concept?.title} to real life in one sentence.`,
-    sample_answer: concept?.explanation?.slice(0, 60) || 'Real-life connection',
-  }), [concept?.id]);
-
-  const segmentedQuestions = [...reviewQuestions, ...baseQuestions, challengeQuestion];
-  const currentQ = segmentedQuestions[questionIndex];
-
-  function startSession(subjectKey = suggested) {
-    setSessionSubject(subjectKey);
-    setTab('session');
-    setSessionActive(true);
-    setSecondsLeft(SESSION_MINUTES * 60);
-    setSegmentIndex(0);
-    setQuestionIndex(0);
-    setCorrect(0);
-    setAnswers([]);
-    setSummary(null);
+  async function loadQuestions(arc, previousQuestions = []) {
+    const res = await fetch('/api/generate-questions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        subject: arc.subjectKey,
+        unit: arc.unitTitle,
+        concept: arc.concept.title,
+        difficulty: 'grade_5',
+        count: QUESTIONS_PER_CONCEPT,
+        previousQuestions,
+      }),
+    });
+    const data = await res.json();
+    return (data.questions || []).slice(0, QUESTIONS_PER_CONCEPT);
   }
 
-  async function gradeCurrentQuestion() {
-    if (!currentQ) return;
+  async function startSession(subjectKey = suggested) {
+    const plan = conceptSequence(subjectKey, state);
+    if (!plan.length) return;
+
+    const firstQuestions = await loadQuestions(plan[0]);
+
+    setSessionSubject(subjectKey);
+    setSessionPlan(plan);
+    setConceptCursor(0);
+    setQuestions(firstQuestions);
+    setQuestionIndex(0);
+    setConceptCorrect(0);
+    setConceptAnswers([]);
+    setConceptSummary(null);
+    setSessionResults([]);
+    setSummary(null);
+    setInputValue('');
+    setFeedback('');
+    setSecondsLeft(SESSION_MINUTES * 60);
+    setSessionActive(true);
+    setTab('session');
+  }
+
+  async function gradeQuestion() {
+    if (!currentQ || !inputValue.trim()) return;
+
+    let score = 0;
     let isCorrect = false;
+    let feedbackText = '';
 
     if (currentQ.type === 'multiple_choice') {
-      isCorrect = inputValue === currentQ.answer;
-    } else if (currentQ.type === 'numeric_input') {
-      const a = parseNumber(inputValue);
-      const b = parseNumber(currentQ.answer);
-      isCorrect = a !== null && b !== null && Math.abs(a - b) <= 0.01;
+      isCorrect = inputValue === currentQ.correctAnswer;
+      score = isCorrect ? 100 : 0;
+      feedbackText = isCorrect ? 'Nice! You got it right.' : `Good try. Correct answer: ${currentQ.correctAnswer}`;
     } else {
-      isCorrect = inputValue.trim().length > 8;
-    }
-
-    const nextAnswers = [...answers, { prompt: currentQ.prompt, correct: isCorrect, answer: inputValue }];
-    setAnswers(nextAnswers);
-    if (isCorrect) {
-      setCorrect((v) => v + 1);
-      setPulse(true);
-      playSuccessTone();
-      setTimeout(() => setPulse(false), 500);
-    }
-
-    setInputValue('');
-    if (questionIndex + 1 >= segmentedQuestions.length) {
-      completeSession(false, nextAnswers, isCorrect ? correct + 1 : correct);
-    } else {
-      setQuestionIndex((i) => i + 1);
-    }
-  }
-
-  function completeSession(auto = false, finalAnswers = answers, finalCorrect = correct) {
-    const asked = finalAnswers.length;
-    const score = asked ? Math.round((finalCorrect / asked) * 100) : 0;
-    const now = new Date();
-    const date = now.toISOString().slice(0, 10);
-    const minutesCompleted = Math.max(1, Math.round((SESSION_MINUTES * 60 - secondsLeft) / 60));
-    const isMastered = score >= 90;
-
-    setState((prev) => {
-      const next = structuredClone(prev);
-      const subj = next.subjects[sessionSubject];
-      const c = concept;
-      const cp = subj.conceptMap[c.id] || { status: 'not_started', attempts: 0, bestScore: 0, timeSpent: 0, title: c.title, unit: unit.title };
-      cp.attempts += 1;
-      cp.lastScore = score;
-      cp.bestScore = Math.max(cp.bestScore || 0, score);
-      cp.lastPracticed = now.toISOString();
-      cp.timeSpent = (cp.timeSpent || 0) + minutesCompleted * 60;
-      cp.status = isMastered ? 'mastered' : cp.attempts > 1 ? 'struggling' : 'in_progress';
-      subj.conceptMap[c.id] = cp;
-
-      if (isMastered && !subj.conceptsCompleted.includes(c.id)) subj.conceptsCompleted.push(c.id);
-      if (isMastered) {
-        const nextConcept = subj.currentConceptIndex + 1;
-        if (subject.units[subj.currentUnitIndex]?.concepts?.[nextConcept]) subj.currentConceptIndex = nextConcept;
-        else if (subject.units[subj.currentUnitIndex + 1]) {
-          subj.currentUnitIndex += 1;
-          subj.currentConceptIndex = 0;
-        }
-      }
-      subj.timeSpent += minutesCompleted;
-      subj.mastery = recomputeSubjectMastery(subj);
-
-      next.totalMinutes += minutesCompleted;
-      next.lastCompletionDate = date;
-      next.sessionLogs.unshift({
-        date,
-        duration: minutesCompleted,
-        subject: sessionSubject,
-        conceptId: c.id,
-        conceptTitle: c.title,
-        score,
-        mastered: isMastered,
-        auto,
+      const res = await fetch('/api/grade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: currentQ.question,
+          correctAnswer: currentQ.correctAnswer,
+          studentAnswer: inputValue,
+          subject: sessionSubject,
+          concept: currentArc?.concept?.title,
+        }),
       });
-      next.parentStatus = `${next.profile.name || 'Raleigh'} completed today ✅`;
-      return next;
-    });
-
-    if (isMastered) {
-      confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
+      const graded = await res.json();
+      isCorrect = Boolean(graded.correct);
+      score = Number(graded.score) || 0;
+      feedbackText = graded.feedback || 'Nice effort — keep going.';
     }
 
-    setSummary({ score, mastered: isMastered, time: minutesCompleted, concept: concept.title });
-    setSessionActive(false);
+    if (isCorrect) {
+      setConceptCorrect((v) => v + 1);
+      playSuccessTone();
+    }
+
+    const nextAnswers = [...conceptAnswers, { question: currentQ.question, answer: inputValue, correct: isCorrect, score }];
+    setConceptAnswers(nextAnswers);
+    setFeedback(feedbackText);
+    setInputValue('');
+
+    if (questionIndex + 1 >= QUESTIONS_PER_CONCEPT) {
+      const totalScore = Math.round(nextAnswers.reduce((a, x) => a + (x.score || 0), 0) / QUESTIONS_PER_CONCEPT);
+      const mastered = totalScore >= 80;
+      setConceptSummary({ score: totalScore, mastered, concept: currentArc.concept.title });
+      setSessionResults((prev) => [...prev, { arc: currentArc, score: totalScore, mastered, answers: nextAnswers }]);
+      return;
+    }
+
+    setQuestionIndex((v) => v + 1);
   }
 
-  async function sendParentDigest() {
+  async function nextConceptOrFinish() {
+    const latest = conceptSummary;
+    if (!latest) return;
+
+    if (!latest.mastered) {
+      const previousQuestions = conceptAnswers.map((a) => a.question);
+      const retry = await loadQuestions(currentArc, previousQuestions);
+      setQuestions(retry);
+      setQuestionIndex(0);
+      setConceptCorrect(0);
+      setConceptAnswers([]);
+      setConceptSummary(null);
+      setFeedback('Let’s reteach this concept with fresh questions.');
+      return;
+    }
+
+    if (conceptCursor + 1 < sessionPlan.length) {
+      const nextArc = sessionPlan[conceptCursor + 1];
+      const nextQs = await loadQuestions(nextArc);
+      setConceptCursor((v) => v + 1);
+      setQuestions(nextQs);
+      setQuestionIndex(0);
+      setConceptCorrect(0);
+      setConceptAnswers([]);
+      setConceptSummary(null);
+      setFeedback('');
+      return;
+    }
+
+    completeSession();
+  }
+
+  async function sendParentDigest(overrideStatus) {
     await fetch('/api/notify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email: state.profile.parentEmail,
-        status: state.parentStatus,
+        status: overrideStatus || state.parentStatus,
         streak: state.streak,
         weeklyCompleted: state.weeklyCompleted,
       }),
     });
   }
 
-  function completeDailyChallenge() {
-    if (dailyChallengeDone) return;
-    setDailyChallengeDone(true);
-    playSuccessTone();
-    confetti({ particleCount: 40, spread: 50, origin: { y: 0.8 } });
+  function completeSession() {
+    const now = new Date();
+    const date = now.toISOString().slice(0, 10);
+    const minutesCompleted = Math.max(1, Math.round((SESSION_MINUTES * 60 - secondsLeft) / 60));
+    const avgScore = sessionResults.length ? Math.round(sessionResults.reduce((a, r) => a + r.score, 0) / sessionResults.length) : 0;
+
+    setState((prev) => {
+      const next = structuredClone(prev);
+      const subj = next.subjects[sessionSubject];
+
+      sessionResults.forEach((result) => {
+        const c = result.arc.concept;
+        const cp = subj.conceptMap[c.id] || { status: 'not_started', attempts: 0, bestScore: 0, timeSpent: 0, title: c.title, unit: result.arc.unitTitle };
+        cp.attempts += 1;
+        cp.lastScore = result.score;
+        cp.bestScore = Math.max(cp.bestScore || 0, result.score);
+        cp.lastPracticed = now.toISOString();
+        cp.timeSpent = (cp.timeSpent || 0) + Math.round((minutesCompleted / CONCEPTS_PER_SESSION) * 60);
+        cp.status = result.mastered ? 'mastered' : cp.attempts > 1 ? 'struggling' : 'in_progress';
+        subj.conceptMap[c.id] = cp;
+
+        if (result.mastered && !subj.conceptsCompleted.includes(c.id)) subj.conceptsCompleted.push(c.id);
+      });
+
+      const masteredConcepts = sessionResults.filter((r) => r.mastered);
+      if (masteredConcepts.length) {
+        const lastMastered = masteredConcepts[masteredConcepts.length - 1].arc;
+        subj.currentUnitIndex = lastMastered.unitIndex;
+        subj.currentConceptIndex = Math.min(lastMastered.conceptIndex + 1, SUBJECTS[sessionSubject].units[lastMastered.unitIndex].concepts.length - 1);
+      }
+
+      subj.timeSpent += minutesCompleted;
+      subj.mastery = recomputeSubjectMastery(subj);
+      next.totalMinutes += minutesCompleted;
+      next.lastCompletionDate = date;
+      next.sessionLogs.unshift({
+        date,
+        duration: minutesCompleted,
+        subject: sessionSubject,
+        conceptId: sessionResults.map((r) => r.arc.concept.id).join(','),
+        conceptTitle: sessionResults.map((r) => r.arc.concept.title).join(' · '),
+        score: avgScore,
+        mastered: avgScore >= 80,
+      });
+      next.parentStatus = `${next.profile.name || 'Raleigh'} completed today ✅`;
+      return next;
+    });
+
+    confetti({ particleCount: 140, spread: 85, origin: { y: 0.6 } });
+    setSummary({ score: avgScore, concepts: sessionResults.length, questions: CONCEPTS_PER_SESSION * QUESTIONS_PER_CONCEPT, time: minutesCompleted });
+    setSessionActive(false);
+    sendParentDigest('Session completed ✅').catch(() => {});
   }
 
   if (!state.profile.onboardingComplete) {
@@ -270,7 +338,6 @@ export default function HomePage() {
       <main className="container fadeIn">
         <section className="card" style={{ maxWidth: 640, margin: '24px auto' }}>
           <h1>Hi! I&apos;m your learning buddy 👋</h1>
-          <p>Let&apos;s set up your first adventure.</p>
           <input placeholder="What&apos;s your name?" value={state.profile.name} onChange={(e) => setState((p) => ({ ...p, profile: { ...p.profile, name: e.target.value } }))} />
           <label>Choose avatar</label>
           <div className="quickReplies">{AVATARS.map((a) => <button key={a} onClick={() => setState((p) => ({ ...p, profile: { ...p.profile, avatar: a } }))}>{a}</button>)}</div>
@@ -296,72 +363,66 @@ export default function HomePage() {
       <nav className="tabs">{['dashboard', 'session', 'progress', 'parent'].map((t) => <button key={t} onClick={() => setTab(t)} className={tab === t ? 'active' : ''}>{t[0].toUpperCase() + t.slice(1)}</button>)}</nav>
 
       {tab === 'dashboard' && (
-        <section className="grid two">
-          {state.sessionLogs.length === 0 ? (
-            <article className="card hero span2">
-              <h2>Welcome to your learning journey map 🗺️</h2>
-              <p>Every session moves you to the next checkpoint. You&apos;re not at zero — you&apos;re at the start line.</p>
-              <button className="primary" onClick={() => startSession(state.profile.startSubject)}>Start Guided First Session</button>
-            </article>
-          ) : (
-            <article className="card hero span2">
-              <h2>{state.parentStatus}</h2>
-              <p>Freeze days used this week: <strong>{state.freezeDaysUsedThisWeek}/2</strong> · Weekends are protected.</p>
-              <div className="actions">
-                <button className="primary" onClick={() => startSession(suggested)}>Start Recommended</button>
-                <select value={sessionSubject} onChange={(e) => setSessionSubject(e.target.value)}>{SUBJECT_KEYS.map((k) => <option key={k} value={k}>{SUBJECTS[k].name}</option>)}</select>
-                <button className="secondary" onClick={() => startSession(sessionSubject)}>Start Chosen</button>
-              </div>
-            </article>
-          )}
-
-          <article className="card">
-            <h3>Daily Challenge ⚡</h3>
-            <p>Bonus question: Which subject do you want to crush today?</p>
-            <button className="secondary" onClick={completeDailyChallenge}>{dailyChallengeDone ? 'Completed ✅' : 'Complete Challenge'}</button>
-          </article>
-
-          <article className="card">
-            <h3>Journey Map</h3>
-            <div style={{ display: 'flex', gap: 8 }}>{[0, 20, 40, 60, 80, 100].map((m) => <div key={m} style={{ flex: 1, padding: 6, borderRadius: 8, background: totalMastery >= m ? '#f59e0b' : '#fde68a' }}>{m}%</div>)}</div>
-          </article>
+        <section className="card">
+          <h2>{state.parentStatus}</h2>
+          <p>30-minute session: 3 concepts × 5 questions = 15 total.</p>
+          <div className="actions">
+            <button className="primary" onClick={() => startSession(suggested)}>Start Recommended</button>
+            <select value={sessionSubject} onChange={(e) => setSessionSubject(e.target.value)}>{SUBJECT_KEYS.map((k) => <option key={k} value={k}>{SUBJECTS[k].name}</option>)}</select>
+            <button className="secondary" onClick={() => startSession(sessionSubject)}>Start Chosen</button>
+          </div>
         </section>
       )}
 
       {tab === 'session' && (
-        <section className="grid two ipad-session">
-          <article className={`card ${pulse ? 'pulse' : ''}`}>
-            <h2>{SEGMENTS[segmentIndex].title}</h2>
-            <p><strong>{SUBJECTS[sessionSubject].emoji} {subject?.name}</strong> · {concept?.title}</p>
-            {currentQ ? (
+        <section className="grid two">
+          <article className="card">
+            {!sessionActive && !summary && <button className="primary" onClick={() => startSession(suggested)}>Start Session</button>}
+            {currentArc && (
+              <>
+                <h2>Mini-arc {conceptCursor + 1}/{CONCEPTS_PER_SESSION}</h2>
+                <p><strong>{SUBJECTS[sessionSubject].emoji} {currentArc.unitTitle}</strong> · {currentArc.concept.title}</p>
+              </>
+            )}
+
+            {sessionActive && currentQ && !conceptSummary && (
               <div className="questionCard">
-                <h3>Question {questionIndex + 1}/{segmentedQuestions.length}</h3>
-                <p>{currentQ.prompt}</p>
-                {currentQ.type === 'multiple_choice' && <div className="quickReplies">{currentQ.choices.map((c) => <button key={c} className={inputValue === c ? 'selected' : ''} onClick={() => setInputValue(c)}>{c}</button>)}</div>}
-                {(currentQ.type === 'numeric_input' || currentQ.type === 'free_text') && <textarea value={inputValue} onChange={(e) => setInputValue(e.target.value)} rows={3} placeholder="Type answer" />}
-                <button className="primary" disabled={!inputValue.trim()} onClick={gradeCurrentQuestion}>Submit</button>
+                <h3>Question {questionIndex + 1}/{QUESTIONS_PER_CONCEPT}</h3>
+                <p>{currentQ.question}</p>
+                {currentQ.type === 'multiple_choice' && <div className="quickReplies">{(currentQ.options || []).map((c) => <button key={c} className={inputValue === c ? 'selected' : ''} onClick={() => setInputValue(c)}>{c}</button>)}</div>}
+                {currentQ.type !== 'multiple_choice' && <textarea value={inputValue} onChange={(e) => setInputValue(e.target.value)} rows={3} placeholder="Type answer" />}
+                <button className="primary" disabled={!inputValue.trim()} onClick={gradeQuestion}>Submit</button>
+                {feedback && <p style={{ marginTop: 10 }}>{feedback}</p>}
               </div>
-            ) : summary ? (
+            )}
+
+            {conceptSummary && (
               <div className="summaryBox">
-                <h3>Session Summary</h3>
-                <p><strong>Concept:</strong> {summary.concept}</p>
-                <p><strong>Score:</strong> {summary.score}% {summary.mastered ? '✅ Mastered' : '🔁 In Progress'}</p>
-                <p><strong>Time:</strong> {summary.time} minutes</p>
+                <h3>{conceptSummary.concept}</h3>
+                <p>Score: <strong>{conceptSummary.score}%</strong></p>
+                <p>{conceptSummary.mastered ? '✅ Mastered. Moving forward.' : '🔁 Let’s reteach before advancing.'}</p>
+                <button className="primary" onClick={nextConceptOrFinish}>{conceptSummary.mastered ? (conceptCursor + 1 < CONCEPTS_PER_SESSION ? 'Next Concept' : 'Finish Session') : 'Reteach This Concept'}</button>
               </div>
-            ) : (
-              <button className="primary" onClick={() => startSession(suggested)}>Start Session</button>
+            )}
+
+            {summary && (
+              <div className="summaryBox">
+                <h3>Session Complete ✅</h3>
+                <p>Concepts: {summary.concepts}/{CONCEPTS_PER_SESSION}</p>
+                <p>Questions: {summary.questions}</p>
+                <p>Score: {summary.score}%</p>
+                <p>Time: {summary.time} minutes</p>
+              </div>
             )}
           </article>
 
-          <article className="card chat">
-            <h3>Mini-arc Progress</h3>
+          <article className="card">
+            <h3>Progress</h3>
             <ul>
-              {SEGMENTS.map((s, idx) => <li key={s.id}>{idx < segmentIndex ? '✅' : idx === segmentIndex ? '▶️' : '⏳'} {s.title}</li>)}
+              {[0, 1, 2].map((i) => <li key={i}>{i < conceptCursor ? '✅' : i === conceptCursor ? '▶️' : '⏳'} Mini-arc {i + 1}</li>)}
             </ul>
-            <div className="bubble assistant">First session gets extra encouragement. You&apos;re doing great — keep going!</div>
+            <div className="timerCorner">{String(Math.floor(secondsLeft / 60)).padStart(2, '0')}:{String(secondsLeft % 60).padStart(2, '0')}</div>
           </article>
-
-          <div className="timerCorner">{String(Math.floor(secondsLeft / 60)).padStart(2, '0')}:{String(secondsLeft % 60).padStart(2, '0')}</div>
         </section>
       )}
 
@@ -378,10 +439,10 @@ export default function HomePage() {
           <article className="card span2">
             <h2>Parent Dashboard</h2>
             <p style={{ fontSize: 20 }}><strong>{state.parentStatus}</strong></p>
-            <p>Weekly done: {state.weeklyCompleted}/5 · Streak: {state.streak} · Freeze used: {state.freezeDaysUsedThisWeek}/2</p>
+            <p>Weekly done: {state.weeklyCompleted}/5 · Streak: {state.streak}</p>
             <input placeholder="Parent email" value={state.profile.parentEmail} onChange={(e) => setState((p) => ({ ...p, profile: { ...p.profile, parentEmail: e.target.value } }))} />
             <div className="actions">
-              <button className="secondary" onClick={sendParentDigest}>Send Daily Digest</button>
+              <button className="secondary" onClick={() => sendParentDigest()}>Send Daily Digest</button>
               <button className="secondary" onClick={() => exportData(state)}>Export JSON</button>
             </div>
           </article>
