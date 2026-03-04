@@ -780,7 +780,7 @@ export default function AlphaLearning() {
           </nav>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--font-display)', fontWeight: 700 }}>
             <span style={{ fontSize: 24 }}>{profileAvatar}</span>
-            <span style={{ fontSize: 'var(--text-label)', color: 'var(--color-text-secondary)' }}>{profileName}</span>
+            <span className="profile-name" style={{ fontSize: 'var(--text-label)', color: 'var(--color-text-secondary)' }}>{profileName}</span>
           </div>
         </div>
       </header>
@@ -792,6 +792,37 @@ export default function AlphaLearning() {
         {view === 'progress' && <ProgressView />}
         {view === 'parent' && <ParentDashboardView />}
       </main>
+
+      {/* Mobile Bottom Navigation */}
+      <nav className={`mobile-bottom-nav${view === 'session' ? ' mobile-bottom-nav--hidden' : ''}`}>
+        {[
+          { id: 'dashboard', label: 'Home',     emoji: '🏠' },
+          { id: 'progress',  label: 'Progress', emoji: '📊' },
+          { id: 'parent',    label: 'Parent',   emoji: '👨‍💼' },
+        ].map(tab => (
+          <button
+            key={tab.id}
+            className={`mobile-nav-tab${view === tab.id ? ' active' : ''}`}
+            onClick={() => {
+              if (tab.id === 'parent' && !parentUnlocked) {
+                const pin = prompt('Enter parent PIN (or leave blank if not set):');
+                const storedPin = state.settings?.parentPin;
+                if (!storedPin || pin === storedPin) {
+                  setParentUnlocked(true);
+                  setView(tab.id);
+                } else {
+                  alert('Incorrect PIN');
+                }
+                return;
+              }
+              setView(tab.id);
+            }}
+          >
+            <span className="mobile-nav-tab__emoji">{tab.emoji}</span>
+            <span className="mobile-nav-tab__label">{tab.label}</span>
+          </button>
+        ))}
+      </nav>
 
       {/* Badge popup */}
       {newBadgePopup && (
@@ -1043,7 +1074,7 @@ export default function AlphaLearning() {
           </div>
 
           {/* Subject + concept info */}
-          <div className="card" style={{ padding: 'var(--space-4)' }}>
+          <div className="card session-sidebar__subject" style={{ padding: 'var(--space-4)' }}>
             <div style={{ fontSize: 28, marginBottom: 4 }}>{subMeta.emoji}</div>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 'var(--text-body)', marginBottom: 2 }}>
               {subMeta.name}
@@ -1054,7 +1085,7 @@ export default function AlphaLearning() {
           </div>
 
           {/* Segment indicators */}
-          <div>
+          <div className="session-sidebar__segments">
             <div className="sidebar__section-title">Session</div>
             {SEGMENTS.map((seg, i) => {
               const segCompleted = q && q.segmentIdx > i;
@@ -1085,7 +1116,7 @@ export default function AlphaLearning() {
           </div>
 
           {/* Progress */}
-          <div>
+          <div className="session-sidebar__progress">
             <div className="sidebar__section-title" style={{ marginBottom: 8 }}>
               Progress — {globalQNum}/{sessionQuestions.length}
             </div>
@@ -1103,7 +1134,7 @@ export default function AlphaLearning() {
 
           {/* Tutor message */}
           {tutorMsg && (
-            <div style={{
+            <div className="session-sidebar__tutor" style={{
               background: 'var(--color-primary-xlight)',
               border: '1.5px solid var(--color-primary-light)',
               borderRadius: 'var(--radius-lg)',
@@ -1116,7 +1147,7 @@ export default function AlphaLearning() {
             </div>
           )}
           {loadingTutor && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--color-text-muted)', fontSize: 'var(--text-caption)' }}>
+            <div className="session-sidebar__tutor" style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--color-text-muted)', fontSize: 'var(--text-caption)' }}>
               <div className="spinner" style={{ width: 16, height: 16 }} />
               Remy is thinking…
             </div>
@@ -1554,7 +1585,7 @@ export default function AlphaLearning() {
         <h2 style={{ marginBottom: 'var(--space-4)' }}>Session History</h2>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 'var(--space-6)' }}>
           {sessions.slice(0, 10).map((s, i) => (
-            <div key={i} style={{
+            <div key={i} className="session-log-row" style={{
               display: 'grid', gridTemplateColumns: '100px 1fr 80px 80px 80px',
               alignItems: 'center', gap: 16,
               padding: '12px 16px',
